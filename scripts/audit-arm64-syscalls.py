@@ -54,7 +54,7 @@ for n in sorted(set(map(int,ref['names']))|set(entries)):
  elif h=='syscall_success_stub':state='Incorrect behavior: success without sync'
  else:state=wrong.get(h,verified.get(h,'Not yet tested at per-call conformance level; inspect handler'))
  lines.append(f'| {n} | {name} | `{h}` | {state} | `{locations.get(h,"kernel/arch/arm64/calls.c")}` |')
-lines+=['','Credential/IPC tests: `tests/linuxrunner/credentials_ipc_contract.c`; execution: `execveat_contract.c`; stat: `stat_empty_path_contract.c`. Full limits and old regressions are in `COMPATIBILITY_AUDIT.md` and `KNOWN_LIMITATIONS.md`.','']
+lines+=['','Credential/IPC tests: `tests/linuxrunner/credentials_ipc_contract.c`; execution: `execveat_contract.c`; stat: `stat_empty_path_contract.c`. Known limitations are listed under Compatibility and limitations in the README.','']
 lines += ['', (repo/'docs/syscall-verified-subsets.md').read_text()]
 (repo/'docs/SYSCALL_MATRIX.md').write_text('\n'.join(lines))
 print('Generated syscall matrix:',len(entries),'explicit;',len(lines)-14,'approximately named rows')

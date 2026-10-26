@@ -327,7 +327,7 @@ Counts describe source dispatch only. A real handler is **Not yet tested** here 
 | 461 | lsm_list_modules | `—` | Missing (ENOSYS outside populated dispatch) | `kernel/arch/arm64/calls.c` |
 | 462 | mseal | `—` | Missing (ENOSYS outside populated dispatch) | `kernel/arch/arm64/calls.c` |
 
-Credential/IPC tests: `tests/linuxrunner/credentials_ipc_contract.c`; execution: `execveat_contract.c`; stat: `stat_empty_path_contract.c`. Full limits and old regressions are in `COMPATIBILITY_AUDIT.md` and `KNOWN_LIMITATIONS.md`.
+Credential/IPC tests: `tests/linuxrunner/credentials_ipc_contract.c`; execution: `execveat_contract.c`; stat: `stat_empty_path_contract.c`. Known limitations are listed under Compatibility and limitations in the README.
 
 
 ## 873 verified subsets (Mac fixtures)
