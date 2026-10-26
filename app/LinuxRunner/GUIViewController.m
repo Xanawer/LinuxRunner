@@ -946,7 +946,7 @@ static NSString *LRTail(NSURL *url,NSUInteger lines){
 - (void)installBrowser{[self installScript:@"install-browser.sh"];}
 - (void)runBrowser{
     // browser-launch.sh must run Chromium with --no-sandbox here, so a page that exploits the renderer gets everything this app can reach.
-    UIAlertController *confirm=[UIAlertController alertControllerWithTitle:@"Run without browser sandbox?" message:@"LinuxRunner Browser runs Chromium with its sandbox disabled. A malicious page that exploits the browser can read and change every Linux environment and shared folder in LinuxRunner. Visit only sites you trust, or use Firefox, which keeps its sandbox." preferredStyle:UIAlertControllerStyleAlert];
+    UIAlertController *confirm=[UIAlertController alertControllerWithTitle:@"Run without browser sandbox?" message:@"LinuxRunner Browser runs Chromium with its sandbox disabled. A malicious page that exploits the browser can read and change every Linux environment and shared folder in LinuxRunner. Visit only sites you trust." preferredStyle:UIAlertControllerStyleAlert];
     [confirm addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
     [confirm addAction:[UIAlertAction actionWithTitle:@"Run Anyway" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action){[self launchBrowser:@"chromium"];}]];
     [self presentViewController:confirm animated:YES completion:nil];
