@@ -1,6 +1,7 @@
 // Freestanding aarch64 Linux regression checks: single-step versus instruction
 // fusion, 64-bit syscall-skip results, SEIZE/INTERRUPT/KILL/DETACH lifetime
-// paths, a tracee reaped mid-request and accept() racing close(). No libc, so it cross-compiles
+// paths, a tracee reaped mid-request, accept() racing close() and signal
+// handler return through the vDSO. No libc, so it cross-compiles
 // with clang alone and runs without signal handlers.
 typedef unsigned long u64; typedef long i64;
 static i64 sc(i64 n,i64 a,i64 b,i64 c,i64 d,i64 e){
@@ -79,6 +80,16 @@ static void test_ptrace_reap_race(void){
     }
     out("  reaped=");outx(reaped);out("\n");
     result("ptrace INTERRUPT/KILL racing a reaping thread",ok&&reaped==RACE_ROUNDS);
+}
+// musl registers handlers without SA_RESTORER, so returning from one runs
+// __kernel_rt_sigreturn in the vDSO, which must be mapped readable/executable.
+static volatile int handled;
+static void on_usr1(int sig){(void)sig;handled=1;}
+static void test_signal_return(void){
+    struct{void(*h)(int);u64 flags;void*restorer;u64 mask;}sa={on_usr1,0,0,0};
+    sc(134/*rt_sigaction*/,10,(i64)&sa,0,8,0);
+    sc(SYS_kill,sc(SYS_getpid,0,0,0,0,0),10,0,0,0);
+    result("signal handler returns through the vDSO trampoline",handled);
 }
 struct sun{unsigned short f;char p[108];};
 static struct sun race_addr={1,"/tmp/fixcheck-race.sock"};
@@ -176,6 +187,7 @@ static void test_sockets(void){
     result("accept/connect on closed fd return EBADF",sc(SYS_accept,999,0,0,0,0)==-9&&sc(SYS_connect,999,(i64)&s,sizeof s,0,0)==-9);
 }
 int main(void){
+    test_signal_return();
     test_singlestep();test_syscall_skip();test_seize_interrupt_kill();test_sockets();
     test_accept_close_race();test_ptrace_reap_race();
     out(failures?"RESULT: FAIL\n":"RESULT: PASS\n");return failures!=0;}
