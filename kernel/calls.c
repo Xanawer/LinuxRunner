@@ -504,6 +504,7 @@ void handle_interrupt(int interrupt) {
         bool fast_path_taken = false;
 
         if (ptrace_skip) {
+            // The tracer has already put the full 64-bit result in X0.
             fast_result = (int) (int64_t) cpu->regs[0];
             fast_path_taken = true;
         }
@@ -531,7 +532,10 @@ void handle_interrupt(int interrupt) {
             // Fast paths return int (small values), safe to use directly
             STRACE("%d call %-3d (fast) = 0x%x\n", current->pid, syscall_num, fast_result);
             int32_t signed_result = (int32_t)fast_result;
-            if (signed_result >= -4095 && signed_result < 0) {
+            if (ptrace_skip) {
+                // Leave X0 as the tracer set it; narrowing would drop the
+                // upper 32 bits of an injected pointer or size.
+            } else if (signed_result >= -4095 && signed_result < 0) {
                 cpu->regs[0] = (uint64_t)(int64_t)signed_result;
             } else {
                 cpu->regs[0] = (uint64_t)(uint32_t)fast_result;
