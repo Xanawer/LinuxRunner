@@ -153,19 +153,18 @@ static int ptrace_resume(struct task *child, addr_t sig, bool syscall_trace, boo
 }
 
 // The tracer is the parent: PTRACE_TRACEME, or ATTACH/SEIZE of one's own child.
-static struct task *find_tracee(pid_t_ pid, bool must_be_stopped) {
+// Called with pids_lock held, which keeps the returned task alive until the
+// caller drops it; the tracee comes back with its ptrace lock held.
+static struct task *find_tracee_locked(pid_t_ pid, bool must_be_stopped) {
     struct task *child = NULL;
-    lock(&pids_lock);
     list_for_each_entry(&current->ptraced, child, ptrace.tracer_link) {
         if (child->pid == pid) {
             lock(&child->ptrace.lock);
-            unlock(&pids_lock);
             if (child->ptrace.traced && (!must_be_stopped || child->ptrace.stopped)) return child;
             unlock(&child->ptrace.lock);
             return NULL;
         }
     }
-    unlock(&pids_lock);
     list_for_each_entry(&current->children, child, siblings) {
         if (child->pid == (pid_t_) pid) {
             lock(&child->ptrace.lock);
@@ -180,6 +179,13 @@ static struct task *find_tracee(pid_t_ pid, bool must_be_stopped) {
         }
     }
     return NULL;
+}
+
+static struct task *find_tracee(pid_t_ pid, bool must_be_stopped) {
+    lock(&pids_lock);
+    struct task *child = find_tracee_locked(pid, must_be_stopped);
+    unlock(&pids_lock);
+    return child;
 }
 
 dword_t sys_ptrace(dword_t request, dword_t pid, addr_t addr, addr_t data) {
@@ -219,34 +225,44 @@ dword_t sys_ptrace(dword_t request, dword_t pid, addr_t addr, addr_t data) {
         unlock(&pids_lock);
         return err;
     }
+    // These signal or unlink the tracee after dropping its ptrace lock, so
+    // pids_lock stays held throughout: an exiting tracee cannot be reaped
+    // and freed under us (lock order: pids_lock before a task's ptrace lock).
     if (request == PTRACE_INTERRUPT_) {
-        struct task *child = find_tracee(pid, false);   // takes pids_lock itself
-        if (!child) return _ESRCH;
+        lock(&pids_lock);
+        struct task *child = find_tracee_locked(pid, false);
+        if (!child) { unlock(&pids_lock); return _ESRCH; }
         int err = child->ptrace.seized ? 0 : _EIO;
         unlock(&child->ptrace.lock);
-        if (!err) {
-            lock(&pids_lock);
-            send_signal(child, SIGTRAP_, (struct siginfo_) {.sig = SIGTRAP_, .code = PTRACE_INTERRUPT_CODE_});
-            unlock(&pids_lock);
-        }
+        if (!err) send_signal(child, SIGTRAP_, (struct siginfo_) {.sig = SIGTRAP_, .code = PTRACE_INTERRUPT_CODE_});
+        unlock(&pids_lock);
         return err;
     }
     if (request == PTRACE_KILL_) {
-        struct task *child = find_tracee(pid, false);
-        if (!child) return _ESRCH;
+        lock(&pids_lock);
+        struct task *child = find_tracee_locked(pid, false);
+        if (!child) { unlock(&pids_lock); return _ESRCH; }
         ptrace_resume(child, 0, false, false);
         unlock(&child->ptrace.lock);
-        lock(&pids_lock);
         send_signal(child, SIGKILL_, SIGINFO_NIL);
         unlock(&pids_lock);
         return 0;
     }
-
+    if (request == PTRACE_DETACH_) {
+        lock(&pids_lock);
+        struct task *child = find_tracee_locked(pid, true);
+        if (!child) { unlock(&pids_lock); return _ESRCH; }
+        int err = ptrace_resume(child, data, false, false);
+        if (!err) { child->ptrace.traced = false; child->ptrace.seized = false; child->ptrace.options = 0; }
+        unlock(&child->ptrace.lock);
+        if (!err) ptrace_forget_new_task(child);
+        unlock(&pids_lock);
+        return err;
+    }
     // Everything else needs a stopped tracee.
     struct task *child = find_tracee(pid, true);
     if (!child) return _ESRCH;
     int err = 0;
-    bool detached = false;
     switch (request) {
         case PTRACE_PEEKTEXT_:
         case PTRACE_PEEKDATA_: {
@@ -273,10 +289,6 @@ dword_t sys_ptrace(dword_t request, dword_t pid, addr_t addr, addr_t data) {
         case PTRACE_CONT_: err = ptrace_resume(child, data, false, false); break;
         case PTRACE_SYSCALL_: err = ptrace_resume(child, data, true, false); break;
         case PTRACE_SINGLESTEP_: err = ptrace_resume(child, data, false, true); break;
-        case PTRACE_DETACH_:
-            err = ptrace_resume(child, data, false, false);
-            if (!err) { child->ptrace.traced = false; child->ptrace.seized = false; child->ptrace.options = 0; detached = true; }
-            break;
         case PTRACE_SETOPTIONS_:
             if (data & ~(addr_t) PTRACE_O_SUPPORTED_) err = _EINVAL;
             else child->ptrace.options = (unsigned) data;
@@ -294,11 +306,6 @@ dword_t sys_ptrace(dword_t request, dword_t pid, addr_t addr, addr_t data) {
             err = _EIO;
     }
     unlock(&child->ptrace.lock);
-    if (detached) {   // lock order: pids_lock before a task's ptrace lock
-        lock(&pids_lock);
-        ptrace_forget_new_task(child);
-        unlock(&pids_lock);
-    }
     return err;
 }
 #else
