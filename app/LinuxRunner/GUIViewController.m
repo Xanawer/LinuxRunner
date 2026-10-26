@@ -944,7 +944,13 @@ static NSString *LRTail(NSURL *url,NSUInteger lines){
     };
 }
 - (void)installBrowser{[self installScript:@"install-browser.sh"];}
-- (void)runBrowser{[self launchBrowser:@"chromium"];}
+- (void)runBrowser{
+    // browser-launch.sh must run Chromium with --no-sandbox here, so a page that exploits the renderer gets everything this app can reach.
+    UIAlertController *confirm=[UIAlertController alertControllerWithTitle:@"Run without browser sandbox?" message:@"LinuxRunner Browser runs Chromium with its sandbox disabled. A malicious page that exploits the browser can read and change every Linux environment and shared folder in LinuxRunner. Visit only sites you trust, or use Firefox, which keeps its sandbox." preferredStyle:UIAlertControllerStyleAlert];
+    [confirm addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    [confirm addAction:[UIAlertAction actionWithTitle:@"Run Anyway" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action){[self launchBrowser:@"chromium"];}]];
+    [self presentViewController:confirm animated:YES completion:nil];
+}
 - (void)runFirefox{[self launchBrowser:@"firefox"];}
 - (void)launchBrowser:(NSString *)target{
     NSString *base=[NSString stringWithFormat:@"/home/mobile/Downloads/%@",LRGUIFolder];
@@ -1089,13 +1095,13 @@ static NSString *LRSessionGraphicsMode(void){
     if(![@[@"off",@"software"] containsObject:glxMode]){[self message:@"LINUXRUNNER_GLX must be off or software. Software GLX is Mesa rendering, not Metal acceleration."];return;}
     NSString *session=[@"session-" stringByAppendingString:NSUUID.UUID.UUIDString.lowercaseString];_sessionURL=[_supportURL URLByAppendingPathComponent:session isDirectory:YES];
     if(![NSFileManager.defaultManager createDirectoryAtURL:_sessionURL withIntermediateDirectories:NO attributes:@{NSFilePosixPermissions:@0700} error:&error]){[self message:error.localizedDescription];return;}
-    uint8_t random[24];if(SecRandomCopyBytes(kSecRandomDefault,sizeof random,random)!=errSecSuccess){[self message:@"Cannot generate display authentication."];return;}
+    uint8_t random[26];if(SecRandomCopyBytes(kSecRandomDefault,sizeof random,random)!=errSecSuccess){[self message:@"Cannot generate display authentication."];return;}
     NSString *alphabet=@"ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";NSMutableString *password=[NSMutableString new],*cookie=[NSMutableString new];
     for(unsigned i=0;i<8;i++)[password appendFormat:@"%C",[alphabet characterAtIndex:random[i]%alphabet.length]];
     for(unsigned i=8;i<24;i++)[cookie appendFormat:@"%02x",random[i]];
     int fd=socket(AF_INET,SOCK_STREAM,0);struct sockaddr_in address={.sin_family=AF_INET,.sin_port=0};address.sin_addr.s_addr=htonl(INADDR_LOOPBACK);socklen_t length=sizeof address;
     if(fd<0||bind(fd,(struct sockaddr *)&address,sizeof address)||getsockname(fd,(struct sockaddr *)&address,&length)){if(fd>=0)close(fd);[self message:@"Cannot allocate a local display port."];return;}
-    uint16_t port=ntohs(address.sin_port);close(fd);unsigned display=1000+((unsigned)random[0]*256+random[1])%4000;
+    uint16_t port=ntohs(address.sin_port);close(fd);unsigned display=1000+((unsigned)random[24]*256+random[25])%4000; // not password bytes: the display number is visible in the guest
     // Sound: a second loopback port for the session's PulseAudio output.
     _audioPort=0;
     if(LRAudioBridge.enabled){int afd=socket(AF_INET,SOCK_STREAM,0);struct sockaddr_in a2={.sin_family=AF_INET,.sin_port=0};a2.sin_addr.s_addr=htonl(INADDR_LOOPBACK);socklen_t l2=sizeof a2;
