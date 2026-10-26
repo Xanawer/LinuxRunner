@@ -785,14 +785,16 @@ static int_t sock_accept(struct fd *sock, addr_t sockaddr_addr, addr_t sockaddr_
         }
     }
 
+    // Retained: a sibling thread can close or reuse the new slot as soon as
+    // it is installed, before the peer handshake below.
+    struct fd *client_fd;
     fd_t client_f = sock_fd_create(client,
-            sock->socket.domain, sock->socket.type, sock->socket.protocol, NULL);
+            sock->socket.domain, sock->socket.type, sock->socket.protocol, &client_fd);
     if (client_f < 0)
         return client_f;
 
     if (sock->socket.domain == AF_LOCAL_) {
         lock(&peer_lock);
-        struct fd *client_fd = f_get(client_f);
         fill_cred(&client_fd->socket.unix_cred);
         struct fd *peer;
         ssize_t res = read(client, &peer, sizeof(peer));
@@ -808,6 +810,7 @@ static int_t sock_accept(struct fd *sock, addr_t sockaddr_addr, addr_t sockaddr_
         }
         unlock(&peer_lock);
     }
+    fd_close(client_fd);
 
     return client_f;
 }
