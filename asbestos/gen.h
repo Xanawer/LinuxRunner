@@ -32,6 +32,7 @@ struct gen_state {
     uint32_t last_insn;
     struct tlb *tlb; // for peephole optimization (peek at next instruction)
     unsigned b_follow_depth; // how many unconditional B's we've followed inline
+    bool single_step; // one guest instruction per block: no peephole fusion
     struct fiber_fault_pc *fault_pcs; // handed to the block by gen_end
     unsigned fault_pc_count, fault_pc_capacity;
 };

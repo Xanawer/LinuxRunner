@@ -1484,6 +1484,7 @@ static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
 static int cpu_single_step(struct cpu_state *cpu, struct tlb *tlb) {
     struct gen_state state;
     gen_start(CPU_IP(cpu), &state);
+    state.single_step = true;
     if (!state.oom) {
         gen_step(&state, tlb);
         gen_exit(&state);

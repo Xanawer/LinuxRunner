@@ -1115,6 +1115,7 @@ void gen_start(addr_t addr, struct gen_state *state) {
     state->ip = addr;
     state->last_insn = 0;
     state->b_follow_depth = 0;
+    state->single_step = false;
     for (int i = 0; i <= 1; i++) {
         state->jump_ip[i] = 0;
     }
@@ -1390,6 +1391,9 @@ static bool simd_modimm_pattern(uint32_t cmode, uint8_t imm8, uint64_t *pattern)
  * Returns true if successful, false if read fails.
  */
 static bool gen_peek_next_insn(struct gen_state *state, uint32_t *next_insn) {
+    // Every fusion peeks here; a single step must not consume a second instruction.
+    if (state->single_step)
+        return false;
     return tlb_read(state->tlb, state->ip, next_insn, sizeof(*next_insn));
 }
 
