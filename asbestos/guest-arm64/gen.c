@@ -2809,7 +2809,9 @@ static int gen_branch(struct gen_state *state, uint32_t insn) {
         switch (opc) {
             case 0:  // BR
 #ifndef ISH_JIT
-                if (arm64_indirect_branch_cache_enabled) {
+                // The cached forms can run the target's block in the same
+                // fiber_enter, which a single step must not do.
+                if (arm64_indirect_branch_cache_enabled && !state->single_step) {
                     gen(state, (unsigned long) gadget_branch_reg_cached);
                     gen(state, rn);
                     break;
@@ -2820,7 +2822,7 @@ static int gen_branch(struct gen_state *state, uint32_t insn) {
                 break;
             case 1:  // BLR
 #ifndef ISH_JIT
-                if (!arm64_indirect_branch_cache_enabled) {
+                if (!arm64_indirect_branch_cache_enabled || state->single_step) {
                     gen(state, (unsigned long) gadget_branch_link_reg);
                     gen(state, rn);
                     gen(state, state->ip);  // return address
