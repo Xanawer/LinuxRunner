@@ -647,11 +647,21 @@ static struct ucred_ cred_for_receiver(struct ucred_ cred) {
     return cred;
 }
 
+// connect() and accept() can block in the host call, so they hold the open
+// description (see sock_getfd_retain) rather than the descriptor slot.
+static int_t sock_connect(struct fd *sock, fd_t sock_fd, addr_t sockaddr_addr, uint_t sockaddr_len);
 int_t sys_connect(fd_t sock_fd, addr_t sockaddr_addr, uint_t sockaddr_len) {
     STRACE("connect(%d, 0x%x, %d)", sock_fd, sockaddr_addr, sockaddr_len);
-    struct fd *sock = sock_getfd(sock_fd);
+    int error;
+    struct fd *sock = sock_getfd_retain(sock_fd, &error);
     if (sock == NULL)
-        return sock_getfd_error(sock_fd);
+        return error;
+    int_t result = sock_connect(sock, sock_fd, sockaddr_addr, sockaddr_len);
+    fd_close(sock);
+    return result;
+}
+
+static int_t sock_connect(struct fd *sock, fd_t sock_fd, addr_t sockaddr_addr, uint_t sockaddr_len) {
     // connect(AF_UNSPEC) dissolves a datagram socket's association and
     // returns 0 on Linux. glibc's getaddrinfo relies on it when sorting
     // candidate addresses (RFC 6724): it connects a UDP socket to each
@@ -727,11 +737,19 @@ int_t sys_listen(fd_t sock_fd, int_t backlog) {
     return err;
 }
 
+static int_t sock_accept(struct fd *sock, addr_t sockaddr_addr, addr_t sockaddr_len_addr);
 int_t sys_accept(fd_t sock_fd, addr_t sockaddr_addr, addr_t sockaddr_len_addr) {
     STRACE("accept(%d, 0x%x, 0x%x)", sock_fd, sockaddr_addr, sockaddr_len_addr);
-    struct fd *sock = sock_getfd(sock_fd);
+    int error;
+    struct fd *sock = sock_getfd_retain(sock_fd, &error);
     if (sock == NULL)
-        return sock_getfd_error(sock_fd);
+        return error;
+    int_t result = sock_accept(sock, sockaddr_addr, sockaddr_len_addr);
+    fd_close(sock);
+    return result;
+}
+
+static int_t sock_accept(struct fd *sock, addr_t sockaddr_addr, addr_t sockaddr_len_addr) {
     dword_t sockaddr_len = 0;
     dword_t sockaddr_buffer_len = 0;
     if (sockaddr_addr != 0) {
