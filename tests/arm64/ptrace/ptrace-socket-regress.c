@@ -1,6 +1,6 @@
 // Freestanding aarch64 Linux regression checks: single-step versus instruction
 // fusion, 64-bit syscall-skip results, SEIZE/INTERRUPT/KILL/DETACH lifetime
-// paths and retained accept/connect descriptors. No libc, so it cross-compiles
+// paths, a tracee reaped mid-request and accept() racing close(). No libc, so it cross-compiles
 // with clang alone and runs without signal handlers.
 typedef unsigned long u64; typedef long i64;
 static i64 sc(i64 n,i64 a,i64 b,i64 c,i64 d,i64 e){
@@ -38,6 +38,69 @@ asm(".text\n.globl stepper\nstepper:\n adrp x9, stepper_data\n add x9, x9, :lo12
     ".data\n.globl stepper_data\nstepper_data: .quad 0\n.text\n");
 static int failures;
 static void result(const char*name,int ok){out(ok?"PASS ":"FAIL ");out(name);out("\n");if(!ok)failures++;}
+
+// Threads: clone(CLONE_VM|FS|FILES|SIGHAND|THREAD|SYSVSEM) onto a static stack.
+#define THREAD_FLAGS 0x50f00
+i64 spawn_thread(i64 flags,void*stack_top,void(*fn)(void));
+asm(".text\n.globl spawn_thread\nspawn_thread:\n mov x10, x2\n mov x2, #0\n mov x3, #0\n mov x4, #0\n mov x8, #220\n svc 0\n"
+    " cbnz x0, 1f\n blr x10\n mov x0, #0\n mov x8, #93\n svc 0\n1: ret\n");
+static char reaper_stack[65536] __attribute__((aligned(16)));
+static char acceptor_stack[65536] __attribute__((aligned(16)));
+#define RACE_ROUNDS 200
+static volatile int reaped, round_no;
+static volatile i64 race_pid;
+// The reaper thread forks each child and reaps it as the real parent, while
+// the main thread traces it as a non-parent and keeps issuing INTERRUPT and
+// KILL. The tracee can be destroyed between dropping its ptrace lock and the
+// signal unless the request holds pids_lock throughout.
+static void reaper(void){
+    for(int i=0;i<RACE_ROUNDS;i++){
+        while(__atomic_load_n(&round_no,__ATOMIC_SEQ_CST)!=i){}
+        i64 pid=fork_();
+        if(!pid){for(volatile int j=0;j<(i%7)*50;j++){}die(0);}
+        __atomic_store_n(&race_pid,pid,__ATOMIC_SEQ_CST);
+        int st;while(sc(SYS_wait4,pid,(i64)&st,0x40000000,0,0)==pid&&(st&0xff)==0x7f){}
+        __atomic_add_fetch(&reaped,1,__ATOMIC_SEQ_CST);
+    }
+}
+static void test_ptrace_reap_race(void){
+    spawn_thread(THREAD_FLAGS,reaper_stack+sizeof reaper_stack,reaper);
+    int ok=1;
+    for(int i=0;i<RACE_ROUNDS;i++){
+        __atomic_store_n(&race_pid,0,__ATOMIC_SEQ_CST);
+        __atomic_store_n(&round_no,i,__ATOMIC_SEQ_CST);
+        i64 pid;while(!(pid=__atomic_load_n(&race_pid,__ATOMIC_SEQ_CST))){}
+        sc(SYS_ptrace,0x4206,pid,0,0,0);
+        int n=0;
+        while(n++<1000000&&__atomic_load_n(&reaped,__ATOMIC_SEQ_CST)<=i){
+            sc(SYS_ptrace,0x4207,pid,0,0,0);sc(SYS_ptrace,8,pid,0,0,0);
+        }
+        if(n>=1000000){ok=0;break;}
+    }
+    out("  reaped=");outx(reaped);out("\n");
+    result("ptrace INTERRUPT/KILL racing a reaping thread",ok&&reaped==RACE_ROUNDS);
+}
+struct sun{unsigned short f;char p[108];};
+static struct sun race_addr={1,"/tmp/fixcheck-race.sock"};
+static volatile i64 race_listener,race_accepted=-1;
+static void acceptor(void){race_accepted=sc(SYS_accept,race_listener,0,0,0,0);}
+// Linux keeps the listening socket alive for an accept() already blocked on
+// it when another thread closes the descriptor; the slot is reused meanwhile.
+static void test_accept_close_race(void){
+    sc(SYS_unlinkat,-100,(i64)race_addr.p,0,0,0);
+    race_listener=sc(SYS_socket,1,1,0,0,0);
+    if(sc(SYS_bind,race_listener,(i64)&race_addr,sizeof race_addr,0,0)||sc(SYS_listen,race_listener,4,0,0,0)){result("accept survives close of its descriptor",0);return;}
+    spawn_thread(THREAD_FLAGS,acceptor_stack+sizeof acceptor_stack,acceptor);
+    struct{i64 s,n;}ts={0,50000000};sc(SYS_nanosleep,(i64)&ts,0,0,0,0);
+    sc(SYS_close,race_listener,0,0,0,0);
+    i64 reuse=sc(SYS_socket,1,1,0,0,0); // takes the freed slot
+    i64 c=sc(SYS_socket,1,1,0,0,0);
+    i64 conn=sc(SYS_connect,c,(i64)&race_addr,sizeof race_addr,0,0);
+    struct{i64 s,n;}tick={0,1000000};
+    for(int i=0;i<2000&&race_accepted<0;i++)sc(SYS_nanosleep,(i64)&tick,0,0,0,0);
+    out("  slot reused=");outx(reuse==race_listener);out(" connect=");outx(conn);out(" accepted fd=");outx(race_accepted);out("\n");
+    result("accept survives close of its descriptor",conn==0&&race_accepted>=0);
+}
 
 static void test_singlestep(void){
     i64 pid=fork_();
@@ -85,7 +148,6 @@ static void test_seize_interrupt_kill(void){
     result("ptrace INTERRUPT/KILL/DETACH on reaped pid return ESRCH",
         sc(SYS_ptrace,0x4207,pid,0,0,0)==-3&&sc(SYS_ptrace,8,pid,0,0,0)==-3&&sc(SYS_ptrace,17,pid,0,0,0)==-3);
 }
-struct sun{unsigned short f;char p[108];};
 struct sin{unsigned short f;unsigned short port;unsigned addr;char z[8];};
 static void test_sockets(void){
     // AF_UNIX accept/connect
@@ -115,5 +177,6 @@ static void test_sockets(void){
 }
 int main(void){
     test_singlestep();test_syscall_skip();test_seize_interrupt_kill();test_sockets();
+    test_accept_close_race();test_ptrace_reap_race();
     out(failures?"RESULT: FAIL\n":"RESULT: PASS\n");return failures!=0;}
 asm(".text\n.globl _start\n_start:\n mov x29,#0\n bl main\n mov x8,#94\n svc 0\n");
